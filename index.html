@@ -48,10 +48,10 @@
       <section id="demo">
         <div class="col">
           <h2><span class="secnum">1</span>Can it keep the details?</h2>
-          <p>Three facts are tucked inside a 64K-token document, and the model is asked for all three. Pick a LowRAM configuration and a batch size to compare the recorded answers, and the memory they take, with the uncompressed model.</p>
+          <p>Three facts are tucked inside a <span class="context-label">64K</span>-token document, and the model is asked for all three. Pick a LowRAM configuration and a batch size to compare the recorded answers, and the memory they take, with the uncompressed model.</p>
         </div>
         <figure class="demo page-wide">
-          <div class="demo-toolbar"><p><strong id="run-label">Loading recorded run…</strong> <span id="run-model"></span></p><p class="fixed-settings">64K tokens per sequence · 4× compression</p></div>
+          <div class="demo-toolbar"><p><strong id="run-label">Loading recorded run…</strong> <span id="run-model"></span></p><p class="fixed-settings"><span class="context-label">64K</span> tokens per sequence · 4× compression</p></div>
           <p id="load-error" role="alert" hidden></p>
           <div class="controls">
             <label>LowRAM configuration<select id="method-select" disabled></select></label>
@@ -134,8 +134,8 @@ python -m examples.lowram_demo
 python -m benchmarks.compare \
   --methods baseline fast lowram \
   --meta-weights /path/to/meta_mlps.pt \
-  --contexts 65536 --batch-sizes 1 2 4 \
-  --ratios 4 --samples 4 --repeats 2 --warmup 1 \
+  --contexts 131072 --batch-sizes 1 2 4 6 8 12 \
+  --ratios 4 --samples 24 --repeats 2 --warmup 1 \
   --decode-tokens 48 \
   --output results/demo/comparison.json</pre>
         </div>

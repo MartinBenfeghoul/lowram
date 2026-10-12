@@ -4,7 +4,7 @@ const $ = (id) => document.getElementById(id);
 const names = {baseline: "Uncompressed", lowram: "LowRAM · full adaptation", fast: "LowRAM · meta-init + selective"};
 // LowRAM keeps one colour everywhere; the uncompressed baseline is the neutral reference.
 const colors = {"LowRAM": "#b5412a", "LowRAM-EQ": "#2f6db3", "Quantisation": "#9a7b00", "Eviction": "#d17fa6", "Uncompressed": "#8a8780", "LowRAM-SR": "#b5412a"};
-const CONTEXT_TOKENS = 65536;
+let CONTEXT_TOKENS = null;
 const TARGET_RATIO = 4;
 let report = null;
 let paper = null;
@@ -35,7 +35,7 @@ function validate(data) {
     throw new Error("Use a JSON export from python -m benchmarks.compare (schema version 1).");
   }
   for (const example of data.examples) {
-    if (typeof example.id !== "string" || typeof example.document !== "string" || typeof example.question !== "string" ||
+    if (typeof example.id !== "string" || !["string", "undefined"].includes(typeof example.document) || typeof example.question !== "string" ||
         !Array.isArray(example.references) || !example.references.length || !example.references.every(v => typeof v === "string") ||
         !Number.isFinite(example.context_tokens)) throw new Error("Invalid document or references in the run.");
   }
@@ -47,6 +47,7 @@ function validate(data) {
     if (row.status === "ok" && row.runs.some(run => !Array.isArray(run.answers) ||
         run.answers.some(a => typeof a.answer !== "string" || typeof a.example_id !== "string"))) throw new Error("Invalid recorded answers.");
   }
+  if (!data.examples.some(e => typeof e.document === "string")) throw new Error("The run has no saved document.");
   if (!data.comparisons.some(r => r.method === "baseline") || !data.comparisons.some(r => r.method !== "baseline")) {
     throw new Error("Include both baseline and a LowRAM configuration in your benchmark.");
   }
@@ -58,9 +59,12 @@ function acceptReport(data) {
   $("load-error").hidden = true;
   text("run-label", "Recorded run");
   text("run-model", report.metadata.model.split("/").pop());
-  if (report.comparisons.some(r => r.context_tokens !== CONTEXT_TOKENS || (r.method !== "baseline" && r.target_ratio !== TARGET_RATIO))) {
-    throw new Error("The demo requires 64K contexts and a 4× target compression ratio.");
+  const contexts = distinct(report.comparisons.map(r => r.context_tokens));
+  if (contexts.length !== 1 || report.comparisons.some(r => r.method !== "baseline" && r.target_ratio !== TARGET_RATIO)) {
+    throw new Error("The demo requires a single context length and a 4× target compression ratio.");
   }
+  CONTEXT_TOKENS = contexts[0];
+  document.querySelectorAll(".context-label").forEach(el => { el.textContent = `${Math.round(CONTEXT_TOKENS / 1024)}K`; });
   selectOptions("method-select", distinct(report.comparisons.filter(r => r.method !== "baseline").map(r => r.method)), v => names[v]);
   if (report.comparisons.some(r => r.method === "fast")) $("method-select").value = "fast";
   updateControls("initial");
@@ -101,7 +105,7 @@ function answerCard(prefix, row, example) {
 }
 
 function renderComparison() {
-  const example = report.examples.find(e => e.context_tokens === CONTEXT_TOKENS);
+  const example = report.examples.find(e => e.context_tokens === CONTEXT_TOKENS && typeof e.document === "string");
   if (!example) return;
   const requestedBaseline = selectedRow("baseline"), baseline = baselineForDisplay(requestedBaseline);
   const compressed = selectedRow($("method-select").value);

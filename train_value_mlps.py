@@ -13,45 +13,53 @@ from utils.model import (
     extract_kv_linear_init,
     get_training_model_and_tokenizer,
 )
-from utils.rope import compute_rope_cos_sin, inverse_rope
+from utils.rope import inverse_rope, model_rope_cos_sin
 
+
+
+def kv_layers(model) -> list[int]:
+    return [
+        idx
+        for idx, layer in enumerate(model.model.layers)
+        if hasattr(layer, "self_attn")
+    ]
 
 
 def get_layer_kv(past_key_values, layer_idx):
+    if not hasattr(past_key_values, "layers"):
+        return (
+            past_key_values.key_cache[layer_idx],
+            past_key_values.value_cache[layer_idx],
+        )
     layer = past_key_values.layers[layer_idx]
     key = getattr(layer, "keys", getattr(layer, "key_states", None))
     value = getattr(layer, "values", getattr(layer, "value_states", None))
     return key, value
 
 
-def unrope(keys, rope_theta):
-    cos, sin = compute_rope_cos_sin(
-        keys.shape[-2],
-        keys.shape[-1],
-        rope_theta,
-        keys.device,
-        keys.dtype,
+def unrope(model, keys):
+    cos, sin = model_rope_cos_sin(
+        model, keys.shape[-2], keys.device, keys.dtype
     )
-    return inverse_rope(keys, cos, sin)
+    return inverse_rope(keys, cos[:, None], sin[:, None])
 
 
-def build_mlps(model, device, dtype):
+def build_mlps(model, layers, device, dtype):
     cfg = model.config
-    head_dim = cfg.hidden_size // cfg.num_attention_heads
+    head_dim = getattr(cfg, "head_dim", None) or (
+        cfg.hidden_size // cfg.num_attention_heads
+    )
     w_linear = extract_kv_linear_init(model)
-    mlps = []
-    for layer_idx in range(cfg.num_hidden_layers):
+    mlps = {}
+    for layer_idx, w in zip(layers, w_linear, strict=True):
         mlp = MLP(
             head_dim=head_dim,
             num_heads=cfg.num_key_value_heads,
             use_residual=True,
         ).to(device=device, dtype=dtype)
-        if w_linear is not None:
-            with torch.no_grad():
-                mlp.W_linear.copy_(
-                    w_linear[layer_idx].to(device=device, dtype=dtype)
-                )
-        mlps.append(mlp)
+        with torch.no_grad():
+            mlp.W_linear.copy_(w.to(device=device, dtype=dtype))
+        mlps[layer_idx] = mlp
     return mlps
 
 
@@ -102,7 +110,7 @@ def save_checkpoint(path, mlps, args, layers, metrics):
     torch.save(checkpoint, path)
 
 
-def prepare_kv_batch(batch, model, layers, device, rope_theta, dtype):
+def prepare_kv_batch(batch, model, layers, device, dtype):
     input_ids = batch["input_ids"].to(device)
     attention_mask = batch["attention_mask"].to(device)
     with torch.no_grad():
@@ -115,7 +123,7 @@ def prepare_kv_batch(batch, model, layers, device, rope_theta, dtype):
     kv_by_layer = {}
     for layer_idx in layers:
         keys, values = get_layer_kv(outputs.past_key_values, layer_idx)
-        keys = unrope(keys.detach(), rope_theta)
+        keys = unrope(model, keys.detach())
         kv_by_layer[layer_idx] = (
             keys.to(dtype=dtype),
             values.detach().to(dtype=dtype),
@@ -148,9 +156,8 @@ def train(args):
         torch_dtype=dtype,
     )
 
-    rope_theta = getattr(model.config, "rope_theta", 500000.0)
-    layers = list(range(model.config.num_hidden_layers))
-    mlps = build_mlps(model, device, dtype)
+    layers = kv_layers(model)
+    mlps = build_mlps(model, layers, device, dtype)
     optimizers = {
         layer_idx: Adam(optimizer_params(mlps[layer_idx], args), lr=args.lr)
         for layer_idx in layers
@@ -174,7 +181,6 @@ def train(args):
                     model,
                     layers,
                     device,
-                    rope_theta,
                     dtype,
                 )
             )
@@ -192,7 +198,7 @@ def train(args):
 
     for batch_idx, batch in enumerate(progress, start=1):
         kv_by_layer = prepare_kv_batch(
-            batch, model, layers, device, rope_theta, dtype
+            batch, model, layers, device, dtype
         )
 
         batch_loss = 0.0

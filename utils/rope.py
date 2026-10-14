@@ -11,6 +11,12 @@ def inverse_rope(
     x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
 ) -> torch.Tensor:
     """Undo RoPE: x = x_rotated * cos - rotate_half(x_rotated) * sin"""
+    rotary_dim = cos.size(-1)
+    if rotary_dim < x.size(-1):  # partial RoPE: the tail is not rotated
+        return torch.cat(
+            (inverse_rope(x[..., :rotary_dim], cos, sin), x[..., rotary_dim:]),
+            dim=-1,
+        )
     return x * cos - rotate_half(x) * sin
 
 
@@ -18,11 +24,23 @@ def apply_rope(
     x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
 ) -> torch.Tensor:
     """Apply RoPE: x_rotated = x * cos + rotate_half(x) * sin"""
+    rotary_dim = cos.size(-1)
+    if rotary_dim < x.size(-1):  # partial RoPE: the tail is not rotated
+        return torch.cat(
+            (apply_rope(x[..., :rotary_dim], cos, sin), x[..., rotary_dim:]),
+            dim=-1,
+        )
     return x * cos + rotate_half(x) * sin
 
 
 def apply_packed_rope(x: torch.Tensor, packed: torch.Tensor) -> torch.Tensor:
     """Apply RoPE from ``[cos_half, sin_half]`` without expanding either."""
+    rotary_dim = packed.size(-1)
+    if rotary_dim < x.size(-1):  # partial RoPE: the tail is not rotated
+        return torch.cat(
+            (apply_packed_rope(x[..., :rotary_dim], packed), x[..., rotary_dim:]),
+            dim=-1,
+        )
     half_dim = x.size(-1) // 2
     x1, x2 = x[..., :half_dim], x[..., half_dim:]
     cos_half = packed[..., :half_dim]
@@ -38,6 +56,15 @@ def inverse_packed_rope(
     packed: torch.Tensor,
 ) -> torch.Tensor:
     """Undo RoPE from ``[cos_half, sin_half]`` without expanding either."""
+    rotary_dim = packed.size(-1)
+    if rotary_dim < x.size(-1):  # partial RoPE: the tail is not rotated
+        return torch.cat(
+            (
+                inverse_packed_rope(x[..., :rotary_dim], packed),
+                x[..., rotary_dim:],
+            ),
+            dim=-1,
+        )
     half_dim = x.size(-1) // 2
     x1, x2 = x[..., :half_dim], x[..., half_dim:]
     cos_half = packed[..., :half_dim]

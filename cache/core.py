@@ -73,6 +73,22 @@ class CompressedCache:
         self._decode_suffix_mask: torch.Tensor | None = None
         self._decode_suffix_prepared = False
 
+        layer_types = self.config.layer_types or ()
+        full_layers = [
+            i for i, t in enumerate(layer_types) if t == "full_attention"
+        ]
+        self._kv_layer_idx = {idx: c for c, idx in enumerate(full_layers)}
+        self.conv_states = [None] * len(layer_types)
+        self.recurrent_states = [None] * len(layer_types)
+
+    @property
+    def has_previous_state(self) -> bool:
+        layer_types = self.config.layer_types
+        last_linear = len(layer_types) - 1 - layer_types[::-1].index(
+            "linear_attention"
+        )
+        return self.conv_states[last_linear] is not None
+
     # --- selective reconstruction -----------------------------------------
 
     @property
@@ -209,6 +225,7 @@ class CompressedCache:
         layer_idx: int,
         cache_kwargs: dict[str, Any] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        layer_idx = self._kv_layer_idx.get(layer_idx, layer_idx)
         if self._prefill_input_shape is None:
             self._prefill_input_shape = (
                 key_states.shape[0], key_states.shape[-2]

@@ -76,6 +76,7 @@ class CompressedCacheConfig:
         default_factory=SelectiveCacheConfig
     )
     eviction_keep_ratio: float = 1.0
+    layer_types: tuple[str, ...] | None = None
 
 
 def _print_backend(config, verbose: bool) -> None:
@@ -208,10 +209,24 @@ def build_key_cache_config(args, num_layers: int) -> KeyCacheConfig:
 
 def build_value_cache_config(args, model, num_layers: int) -> ValueCacheConfig:
     if args.v_cache_type == "mlp":
+        from model.meta_learning import LearnedInit
         from utils.model import extract_kv_linear_init
+
+        learned_init = None
+        layer_types = getattr(model.config, "layer_types", None) or ()
+        path = args.meta_weights_path or args.value_mlp_weights_path
+        if "linear_attention" in layer_types and path is not None:
+            checkpoint = LearnedInit.from_checkpoint(path)
+            full_layers = [
+                i for i, t in enumerate(layer_types) if t == "full_attention"
+            ]
+            learned_init = LearnedInit(
+                {c: checkpoint.for_layer(i) for c, i in enumerate(full_layers)}
+            )
 
         return MLPValueCacheConfig(
             target_compression_ratio=args.target_cr,
+            learned_init=learned_init,
             residual_sink_tokens=getattr(args, "v_residual_sink_tokens", 0),
             num_epochs=args.num_epochs,
             meta_weights_path=args.meta_weights_path,
@@ -232,10 +247,16 @@ def build_value_cache_config(args, model, num_layers: int) -> ValueCacheConfig:
 
 def build_cache_config(args, model) -> CompressedCacheConfig:
     """Assemble the full cache config from parsed CLI arguments."""
-    num_layers = model.config.num_hidden_layers
+    layer_types = tuple(getattr(model.config, "layer_types", None) or ())
+    if "linear_attention" in layer_types:
+        num_layers = layer_types.count("full_attention")
+    else:
+        layer_types = None
+        num_layers = model.config.num_hidden_layers
     return CompressedCacheConfig(
         key=build_key_cache_config(args, num_layers),
         value=build_value_cache_config(args, model, num_layers),
         selective=SelectiveCacheConfig(enabled=args.selective_reconstruction),
         eviction_keep_ratio=args.eviction_keep_ratio,
+        layer_types=layer_types,
     )

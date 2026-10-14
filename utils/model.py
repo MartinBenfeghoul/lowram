@@ -72,8 +72,10 @@ def extract_kv_linear_init(model) -> list[torch.Tensor]:
     """Pre-compute a per-KV-head W_linear for every transformer layer."""
     cfg = model.config
     num_kv_heads = cfg.num_key_value_heads
-    head_dim = cfg.hidden_size // cfg.num_attention_heads
-    layers = model.model.layers
+    head_dim = getattr(cfg, "head_dim", None) or (
+        cfg.hidden_size // cfg.num_attention_heads
+    )
+    layers = [lay for lay in model.model.layers if hasattr(lay, "self_attn")]
 
     # TODO: Batched pinv across all layers may need per-layer looping to cap RAM for larger models
     W_k_raw = torch.stack(

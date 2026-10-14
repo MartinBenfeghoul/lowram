@@ -11,6 +11,12 @@ def inverse_rope(
     x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
 ) -> torch.Tensor:
     """Undo RoPE: x = x_rotated * cos - rotate_half(x_rotated) * sin"""
+    rotary_dim = cos.size(-1)
+    if rotary_dim < x.size(-1):  # partial RoPE: the tail is not rotated
+        return torch.cat(
+            (inverse_rope(x[..., :rotary_dim], cos, sin), x[..., rotary_dim:]),
+            dim=-1,
+        )
     return x * cos - rotate_half(x) * sin
 
 
@@ -18,7 +24,55 @@ def apply_rope(
     x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
 ) -> torch.Tensor:
     """Apply RoPE: x_rotated = x * cos + rotate_half(x) * sin"""
+    rotary_dim = cos.size(-1)
+    if rotary_dim < x.size(-1):  # partial RoPE: the tail is not rotated
+        return torch.cat(
+            (apply_rope(x[..., :rotary_dim], cos, sin), x[..., rotary_dim:]),
+            dim=-1,
+        )
     return x * cos + rotate_half(x) * sin
+
+
+def apply_packed_rope(x: torch.Tensor, packed: torch.Tensor) -> torch.Tensor:
+    """Apply RoPE from ``[cos_half, sin_half]`` without expanding either."""
+    rotary_dim = packed.size(-1)
+    if rotary_dim < x.size(-1):  # partial RoPE: the tail is not rotated
+        return torch.cat(
+            (apply_packed_rope(x[..., :rotary_dim], packed), x[..., rotary_dim:]),
+            dim=-1,
+        )
+    half_dim = x.size(-1) // 2
+    x1, x2 = x[..., :half_dim], x[..., half_dim:]
+    cos_half = packed[..., :half_dim]
+    sin_half = packed[..., half_dim:]
+    return torch.cat(
+        (x1 * cos_half - x2 * sin_half, x2 * cos_half + x1 * sin_half),
+        dim=-1,
+    )
+
+
+def inverse_packed_rope(
+    x: torch.Tensor,
+    packed: torch.Tensor,
+) -> torch.Tensor:
+    """Undo RoPE from ``[cos_half, sin_half]`` without expanding either."""
+    rotary_dim = packed.size(-1)
+    if rotary_dim < x.size(-1):  # partial RoPE: the tail is not rotated
+        return torch.cat(
+            (
+                inverse_packed_rope(x[..., :rotary_dim], packed),
+                x[..., rotary_dim:],
+            ),
+            dim=-1,
+        )
+    half_dim = x.size(-1) // 2
+    x1, x2 = x[..., :half_dim], x[..., half_dim:]
+    cos_half = packed[..., :half_dim]
+    sin_half = packed[..., half_dim:]
+    return torch.cat(
+        (x1 * cos_half + x2 * sin_half, x2 * cos_half - x1 * sin_half),
+        dim=-1,
+    )
 
 
 def compute_rope_cos_sin(
@@ -37,3 +91,39 @@ def compute_rope_cos_sin(
     freqs = torch.outer(t, inv_freq)
     emb = torch.cat([freqs, freqs], dim=-1)
     return emb.cos()[None, None].to(dtype), emb.sin()[None, None].to(dtype)
+
+
+def get_rope_theta(model_config) -> float:
+    rope_theta = getattr(model_config, "rope_theta", None)
+    if rope_theta is None:
+        rope_parameters = getattr(model_config, "rope_parameters", {}) or {}
+        rope_theta = rope_parameters.get("rope_theta")
+    if rope_theta is None:
+        raise ValueError("Model config does not define rope_theta")
+    return float(rope_theta)
+
+
+def get_rotary_embedding(model):
+    """The model's own rotary embedding module."""
+    for attribute in ("model", "transformer"):
+        inner = getattr(model, attribute, None)
+        if inner is not None and hasattr(inner, "rotary_emb"):
+            return inner.rotary_emb
+    if hasattr(model, "rotary_emb"):
+        return model.rotary_emb
+    raise ValueError("Model does not expose a rotary embedding module")
+
+
+def model_rope_cos_sin(
+    model,
+    seq_len: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """RoPE cos/sin exactly as the model applies them."""
+    rotary = get_rotary_embedding(model)
+    position_ids = torch.arange(seq_len, device=device)[None]
+    reference = torch.empty(0, device=device, dtype=dtype)
+    with torch.no_grad():
+        cos, sin = rotary(reference, position_ids)
+    return cos.to(dtype=dtype), sin.to(dtype=dtype)

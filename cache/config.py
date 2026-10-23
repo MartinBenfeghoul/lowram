@@ -51,6 +51,15 @@ class MLPValueCacheConfig:
 
 
 @dataclass(frozen=True)
+class LinearValueCacheConfig:
+    target_compression_ratio: float
+    turboquant_residuals: bool = False
+    compressor_bits: int = 3
+    residual_sink_tokens: int = 0
+    cache_type: Literal["linear"] = field(default="linear", init=False)
+
+
+@dataclass(frozen=True)
 class SelectiveCacheConfig:
     enabled: bool = False
     token_budget: int = 2048
@@ -65,6 +74,7 @@ ValueCacheConfig = (
     | XKVCacheConfig
     | TurboQuantCacheConfig
     | MLPValueCacheConfig
+    | LinearValueCacheConfig
 )
 
 
@@ -130,6 +140,7 @@ def build_value_cache(
     verbose: bool,
 ):
     from .backends.mlp_values import MLPValueCache
+    from .backends.linear_values import LinearValueCache
     from .backends.tensor import SingleTensorCache
     from .backends.turboquant import TurboQuantCache
     from .backends.xkv import XKVKeysCache
@@ -139,6 +150,18 @@ def build_value_cache(
         return (
             SingleTensorCache(
                 ddp_cache_data=ddp_cache_data,
+                rope_cache=rope_cache,
+            ),
+            True,
+        )
+    if isinstance(config, LinearValueCacheConfig):
+        return (
+            LinearValueCache(
+                ddp_cache_data=ddp_cache_data,
+                target_cr=config.target_compression_ratio,
+                residual_sink_tokens=config.residual_sink_tokens,
+                turboquant_residuals=config.turboquant_residuals,
+                compressor_bits=config.compressor_bits,
                 rope_cache=rope_cache,
             ),
             True,
@@ -208,6 +231,13 @@ def build_key_cache_config(args, num_layers: int) -> KeyCacheConfig:
 
 
 def build_value_cache_config(args, model, num_layers: int) -> ValueCacheConfig:
+    if args.v_cache_type == "linear":
+        return LinearValueCacheConfig(
+            target_compression_ratio=args.target_cr,
+            residual_sink_tokens=getattr(args, "v_residual_sink_tokens", 0),
+            turboquant_residuals=args.v_turboquant_residuals,
+            compressor_bits=args.v_compressor_bits,
+        )
     if args.v_cache_type == "mlp":
         from model.meta_learning import LearnedInit
         from utils.model import extract_kv_linear_init

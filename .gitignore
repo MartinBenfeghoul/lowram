@@ -5,7 +5,7 @@ wget-log*
 .env
 *.so
 
-checkpoints/*
+old_checkpoints/*
 results/*
 wandb/
 

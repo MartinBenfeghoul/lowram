@@ -4,7 +4,7 @@ datasets==4.5.0
 numpy==2.2.6
 accelerate==1.12.0
 pandas==2.3.3
-lm-eval[ruler, longbench]==0.4.11
+lm-eval[ruler, longbench]==0.4.13
 openai
 scipy
 

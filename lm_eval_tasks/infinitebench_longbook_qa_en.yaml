@@ -1,0 +1,24 @@
+task: infinitebench_longbook_qa_en
+dataset_path: xinrongzhang2022/InfiniteBench
+dataset_kwargs:
+  data_files:
+    test: longbook_qa_eng.jsonl
+test_split: test
+output_type: generate_until
+num_fewshot: 0
+description: "Read the book below and answer a question.\n\n"
+doc_to_text: "{{context}}\n\nQuestion: {{input}}\n\nBe very concise."
+doc_to_target: "{{answer[0]}}"
+target_delimiter: " "
+process_results: !function infinitebench_utils.process_results_qa_en
+metric_list:
+  - metric: score
+    aggregation: mean
+    higher_is_better: true
+generation_kwargs:
+  do_sample: false
+  temperature: 0.0
+  max_gen_toks: 40
+  until: ["\n"]
+metadata:
+  version: 1.0

@@ -25,6 +25,10 @@ from utils.data import filter_tasks_by_min_seq_len
 from utils.logging import get_output_path
 from utils.model import get_device, get_model_and_tokenizer
 
+LOCAL_TASKS = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "lm_eval_tasks"
+)
+
 GEN_KWARGS = {
     "do_sample": False,
     "use_cache": True,
@@ -100,7 +104,7 @@ def main(args):
     metadata = {"tokenizer": args.model_name}
     if args.max_seq_lengths is not None:
         metadata["max_seq_lengths"] = args.max_seq_lengths
-    tm = TaskManager(metadata=metadata)
+    tm = TaskManager(include_path=LOCAL_TASKS, metadata=metadata)
 
     eval_tasks = args.tasks
     if args.min_seq_len is not None:
